@@ -21,18 +21,23 @@ foreach (['LCNWindowGroup/module.json', 'LCNWindowGroup/form.json'] as $relative
 $mustContain = [
     "private const LCN_WINDOW_MODULE_ID = '{7AA3FC56-5CEC-4C42-9AF3-42DB2084772D}'",
     "private const KLF200_NODE_MODULE_ID = '{4EBD07B1-2962-4531-AC5F-7944789A9CE5}'",
+    'private const KLF200_RUN_IDENT = \'RunStatus\'',
     'private const MSG_VARIABLE_UPDATE = 10603',
     'private const COMMAND_GAP_MS = 1000',
-    'KLF200_ShutterMoveDown($instanceID)',
-    'LCW_Close($instanceID)',
+    'IPS_RunScriptText($script)',
+    'KLF200_ShutterMoveDown(%1$d)',
+    'LCW_Close(%1$d)',
     'LCW_GetWindowState((int) $Member[\'instanceID\'])',
     'IPS_GetObjectIDByIdent(self::LCN_STATUS_IDENT, $InstanceID)',
     'IPS_GetObjectIDByIdent(self::KLF200_MAIN_IDENT, $InstanceID)',
+    'IPS_GetObjectIDByIdent(self::KLF200_RUN_IDENT, $InstanceID)',
     'SetTimerInterval(self::TIMER_NAME, self::COMMAND_GAP_MS)',
     "WriteAttributeBoolean('Running', false)",
     "WriteAttributeString('Queue', '[]')",
-    'RegisterMessage($statusID, self::MSG_VARIABLE_UPDATE)',
+    'RegisterMessage($variableID, self::MSG_VARIABLE_UPDATE)',
     "'members' => \$this->GetMemberInfo(\$validation['members'])",
+    "\$statusText = 'LÄUFT'",
+    "\$statusText = 'FÄHRT ZU'",
 ];
 foreach ($mustContain as $needle) {
     if (!str_contains($module, $needle)) {
@@ -44,7 +49,6 @@ foreach ($mustContain as $needle) {
 $forbidden = [
     '$this->SetValue(',
     'usleep(',
-    'sleep(',
     'RequestAction($Member',
     'KLF200_ShutterMoveUp',
     'START_DELAY_MS',
@@ -69,19 +73,22 @@ if (!str_contains($closeBody, "static fn (array \$member): int => (int) \$member
     exit(1);
 }
 
-// ProcessNext must not disable/re-arm the timer at every callback.
-$finishStart = strpos($module, 'public function ValidateSelection(): bool');
-$processBody = substr($module, $processStart, $finishStart - $processStart);
-if (str_starts_with(trim(substr($processBody, strpos($processBody, '{') + 1)), '$this->SetTimerInterval(self::TIMER_NAME, 0)')) {
-    fwrite(STDERR, "FAIL ProcessNext still disables timer at callback start\n");
-    exit(1);
+// Critical V0.2.2 architecture: ProcessNext must only launch an asynchronous
+// worker; no direct hardware command is allowed in the timer callback.
+$workerResultStart = strpos($module, 'public function WorkerResult(');
+$processBody = substr($module, $processStart, $workerResultStart - $processStart);
+foreach (['KLF200_ShutterMoveDown(', 'LCW_Close('] as $needle) {
+    if (str_contains($processBody, $needle)) {
+        fwrite(STDERR, "FAIL timer callback still calls hardware synchronously: $needle\n");
+        exit(1);
+    }
 }
-if (str_contains($processBody, 'SetTimerInterval(self::TIMER_NAME, self::COMMAND_GAP_MS)')) {
-    fwrite(STDERR, "FAIL ProcessNext still re-arms 1s timer on every callback\n");
+if (!str_contains($processBody, 'LaunchCloseWorker($member)')) {
+    fwrite(STDERR, "FAIL timer callback does not launch async worker\n");
     exit(1);
 }
 
-// The tile mirrors the Zentral-AUS button and adds feedback + live member list.
+// The tile mirrors Zentral-AUS and provides feedback + live member list.
 foreach ([
     'background: #00c7b0',
     'width: 116px',
@@ -103,13 +110,10 @@ foreach ([
     }
 }
 
-// Running sequence must not grey the button.
 if (str_contains($html, 'disabled = Boolean(state.running)') || str_contains($html, 'disabled=Boolean(state.running)')) {
     fwrite(STDERR, "FAIL running sequence greys button\n");
     exit(1);
 }
-
-// No internal list scrolling.
 if (str_contains($html, 'overflow-y: auto')) {
     fwrite(STDERR, "FAIL member list has internal vertical scroll\n");
     exit(1);

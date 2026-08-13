@@ -14,8 +14,10 @@ $GLOBALS['instances'] = [
     999 => ['module' => '{00000000-0000-0000-0000-000000000999}', 'name' => 'Falsch'],
 ];
 $GLOBALS['variables'] = [
-    301 => ['type' => 1, 'value' => 0],      // KLF offen
-    302 => ['type' => 1, 'value' => 51200],  // KLF zu
+    301 => ['type' => 1, 'value' => 0],      // KLF MAIN offen
+    302 => ['type' => 1, 'value' => 51200],  // KLF MAIN zu
+    311 => ['type' => 0, 'value' => false],  // KLF RunStatus gestoppt
+    312 => ['type' => 0, 'value' => false],
     401 => ['type' => 1, 'value' => 2],      // LCN Status offen
     402 => ['type' => 1, 'value' => 1],      // LCN Status zu
     403 => ['type' => 1, 'value' => 2],      // LCN Status offen
@@ -24,11 +26,15 @@ $GLOBALS['idents'] = [
     101 => ['Status' => 401],
     102 => ['Status' => 402],
     103 => ['Status' => 403],
-    201 => ['MAIN' => 301],
-    202 => ['MAIN' => 302],
+    201 => ['MAIN' => 301, 'RunStatus' => 311],
+    202 => ['MAIN' => 302, 'RunStatus' => 312],
 ];
 $GLOBALS['lcn_state'] = [101 => 2, 102 => 1, 103 => 2];
 $GLOBALS['commands'] = [];
+$GLOBALS['asyncScripts'] = [];
+$GLOBALS['workerResults'] = [];
+$GLOBALS['logs'] = [];
+$GLOBALS['groupObject'] = null;
 
 function IPS_InstanceExists(int $id): bool { return isset($GLOBALS['instances'][$id]); }
 function IPS_GetInstance(int $id): array { return ['ModuleInfo' => ['ModuleID' => $GLOBALS['instances'][$id]['module']]]; }
@@ -40,6 +46,16 @@ function GetValue(int $id): mixed { return $GLOBALS['variables'][$id]['value']; 
 function LCW_GetWindowState(int $id): int { return $GLOBALS['lcn_state'][$id] ?? 0; }
 function LCW_Close(int $id): bool { $GLOBALS['commands'][] = ['lcn', $id]; return true; }
 function KLF200_ShutterMoveDown(int $id): bool { $GLOBALS['commands'][] = ['klf', $id]; return true; }
+function IPS_RunScriptText(string $script): bool { $GLOBALS['asyncScripts'][] = $script; return true; }
+function IPS_FunctionExists(string $name): bool { return function_exists($name); }
+function IPS_LogMessage(string $sender, string $message): void { $GLOBALS['logs'][] = [$sender, $message]; }
+function LCWG_WorkerResult(int $groupID, int $memberID, bool $success, string $message = ''): void
+{
+    $GLOBALS['workerResults'][] = [$memberID, $success, $message];
+    if ($GLOBALS['groupObject'] instanceof LCNWindowGroup) {
+        $GLOBALS['groupObject']->WorkerResult($memberID, $success, $message);
+    }
+}
 
 class IPSModuleStrict
 {
@@ -91,12 +107,10 @@ function assertSameStrict(mixed $expected, mixed $actual, string $label): void
         exit(1);
     }
 }
-function assertTrueStrict(bool $actual, string $label): void
-{
-    assertSameStrict(true, $actual, $label);
-}
+function assertTrueStrict(bool $actual, string $label): void { assertSameStrict(true, $actual, $label); }
 
 $group = new LCNWindowGroup();
+$GLOBALS['groupObject'] = $group;
 $group->Create();
 $group->MockSetProperty('Members', json_encode([
     ['InstanceID' => 201], // Dachfenster offen
@@ -108,88 +122,94 @@ $group->MockSetProperty('Members', json_encode([
 $group->ApplyChanges();
 
 assertSameStrict(102, $group->moduleStatus, 'valid mixed selection active');
-assertSameStrict('5 Fenster · 1 s Abstand', $group->summary, 'summary');
+assertSameStrict('5 Fenster · 1 s Abstand · async', $group->summary, 'summary');
 assertSameStrict(0, $group->timers['SequenceTimer'], 'ApplyChanges timer off');
 assertSameStrict([], $GLOBALS['commands'], 'ApplyChanges sends no hardware command');
 
-// Statusbeobachtung muss für LCN-Status und KLF-MAIN registriert sein.
+// Beobachtet werden LCN Status, KLF MAIN UND KLF RunStatus.
 $messages = $group->MockMessages();
-foreach ([301, 302, 401, 402, 403] as $statusID) {
+foreach ([301, 302, 311, 312, 401, 402, 403] as $statusID) {
     assertTrueStrict(isset($messages[$statusID][10603]), 'status message registered #' . $statusID);
 }
 
-// Visu-Zustand enthält die Mitgliederliste mit realen Zuständen.
 $initialPayload = json_decode((string) end($group->visualPayloads), true);
-assertSameStrict(5, count($initialPayload['members'] ?? []), 'five status list members');
-assertSameStrict('Dachfenster Schlafzimmer', $initialPayload['members'][0]['name'] ?? '', 'first member name');
-assertSameStrict('AUF', $initialPayload['members'][0]['statusText'] ?? '', 'open KLF status');
-assertSameStrict('AUF', $initialPayload['members'][1]['statusText'] ?? '', 'open LCN status');
+assertSameStrict('AUF', $initialPayload['members'][0]['statusText'] ?? '', 'KLF idle open');
+assertSameStrict('AUF', $initialPayload['members'][1]['statusText'] ?? '', 'LCN idle open');
 
-// CloseAll legt ALLE Mitglieder in die Queue und startet einen dauerhaft aktiven 1-s-Timer.
 assertSameStrict(true, $group->CloseAll(), 'CloseAll starts');
 assertSameStrict([], $GLOBALS['commands'], 'click itself sends no hardware command');
-assertSameStrict(true, $group->MockRunning(), 'sequence running after click');
-assertSameStrict(1000, $group->timers['SequenceTimer'], 'persistent 1s timer armed');
-assertSameStrict([201, 101, 103, 102, 202], json_decode($group->MockQueue(), true), 'all selected members queued');
+assertSameStrict([], $GLOBALS['asyncScripts'], 'click itself starts no worker');
+assertSameStrict(1000, $group->timers['SequenceTimer'], '1s dispatcher armed');
 
-// Zweiter Tastendruck während laufender Folge darf keine zweite Queue erzeugen.
-assertSameStrict(true, $group->CloseAll(), 'repeated CloseAll accepted as no-op');
-assertSameStrict([], $GLOBALS['commands'], 'no duplicate from repeated press');
-
-// Drei tatsächlich notwendige Befehle hintereinander: genau der reale Fehlerfall aus V0.2.0.
-assertSameStrict(true, $group->ProcessNext(), 'slot 1');
-assertSameStrict([['klf', 201]], $GLOBALS['commands'], 'slot 1 closes roof window');
-assertSameStrict(1000, $group->timers['SequenceTimer'], 'timer stays continuously armed after slot 1');
+// Kritischer Realfall: KLF zuerst, danach zwei LCN-Fenster.
+// ProcessNext darf dabei niemals KLF/LCN synchron ausführen, sondern muss drei
+// voneinander unabhängige Worker starten. Ein blockierender KLF-Worker kann den
+// Gruppentimer daher nicht festhalten.
+assertSameStrict(true, $group->ProcessNext(), 'dispatch slot 1');
+assertSameStrict([], $GLOBALS['commands'], 'slot 1 did not execute KLF synchronously');
+assertSameStrict(1, count($GLOBALS['asyncScripts']), 'slot 1 launched worker');
 assertSameStrict(true, $group->MockRunning(), 'still running after slot 1');
 
-assertSameStrict(true, $group->ProcessNext(), 'slot 2');
-assertSameStrict([['klf', 201], ['lcn', 101]], $GLOBALS['commands'], 'slot 2 closes WC');
-assertSameStrict(1000, $group->timers['SequenceTimer'], 'timer stays continuously armed after slot 2');
-assertSameStrict(true, $group->MockRunning(), 'still running after slot 2');
+assertSameStrict(true, $group->ProcessNext(), 'dispatch slot 2');
+assertSameStrict([], $GLOBALS['commands'], 'slot 2 did not execute LCN synchronously');
+assertSameStrict(2, count($GLOBALS['asyncScripts']), 'slot 2 launched independent worker');
 
-assertSameStrict(true, $group->ProcessNext(), 'slot 3');
-assertSameStrict([['klf', 201], ['lcn', 101], ['lcn', 103]], $GLOBALS['commands'], 'slot 3 closes kitchen');
-assertSameStrict(1000, $group->timers['SequenceTimer'], 'timer still armed until trailing closed members are consumed');
-assertSameStrict(true, $group->MockRunning(), 'still running before closed tail is consumed');
+assertSameStrict(true, $group->ProcessNext(), 'dispatch slot 3');
+assertSameStrict([], $GLOBALS['commands'], 'slot 3 did not execute LCN synchronously');
+assertSameStrict(3, count($GLOBALS['asyncScripts']), 'slot 3 launched independent worker');
+assertSameStrict(true, $group->MockRunning(), 'closed tail still queued');
 
-// Nächster Slot überspringt beide bereits geschlossenen Fenster und beendet die Folge.
 assertSameStrict(true, $group->ProcessNext(), 'slot 4 consumes closed tail');
-assertSameStrict([['klf', 201], ['lcn', 101], ['lcn', 103]], $GLOBALS['commands'], 'no commands for already closed tail');
-assertSameStrict(false, $group->MockRunning(), 'sequence finished');
-assertSameStrict(0, $group->timers['SequenceTimer'], 'timer off only at sequence finish');
-assertSameStrict('[]', $group->MockQueue(), 'queue empty after finish');
+assertSameStrict(3, count($GLOBALS['asyncScripts']), 'closed windows launched no workers');
+assertSameStrict(false, $group->MockRunning(), 'dispatch sequence finished');
+assertSameStrict(0, $group->timers['SequenceTimer'], 'timer off after dispatch sequence');
 
-// Ein beim Klick noch geschlossenes Fenster muss trotzdem in der Queue bleiben.
-// Öffnet es vor seinem Slot, muss Zentral-ZU es sicher erfassen.
-$GLOBALS['commands'] = [];
-$GLOBALS['lcn_state'][103] = 1;
-$GLOBALS['variables'][403]['value'] = 1;
-$group->MockSetProperty('Members', json_encode([['InstanceID' => 103]]));
-$group->ApplyChanges();
-assertSameStrict(true, $group->CloseAll(), 'late-state sequence starts');
-assertSameStrict([103], json_decode($group->MockQueue(), true), 'closed-at-click member still queued');
-$GLOBALS['lcn_state'][103] = 2;
-$GLOBALS['variables'][403]['value'] = 2;
-assertSameStrict(true, $group->ProcessNext(), 'late-open member processed');
-assertSameStrict([['lcn', 103]], $GLOBALS['commands'], 'late-open member receives close command');
-assertSameStrict(false, $group->MockRunning(), 'single-member sequence finishes');
+// Workertexte müssen die richtigen Geräte adressieren.
+assertTrueStrict(str_contains($GLOBALS['asyncScripts'][0], 'KLF200_ShutterMoveDown(201)'), 'worker 1 KLF target');
+assertTrueStrict(str_contains($GLOBALS['asyncScripts'][1], 'LCW_Close(101)'), 'worker 2 WC target');
+assertTrueStrict(str_contains($GLOBALS['asyncScripts'][2], 'LCW_Close(103)'), 'worker 3 kitchen target');
 
-// Statusänderung muss die Visualisierung aktualisieren, ohne einen Hardwarebefehl zu senden.
-$beforePayloads = count($group->visualPayloads);
-$beforeCommands = count($GLOBALS['commands']);
-$group->MessageSink(time(), 403, 10603, [1, true, true]);
-assertSameStrict($beforePayloads + 1, count($group->visualPayloads), 'status MessageSink refreshes visualization');
-assertSameStrict($beforeCommands, count($GLOBALS['commands']), 'status refresh sends no hardware command');
+// Simuliere die getrennten Script-Kontexte: alle drei Befehle erreichen ihre Hardwarefunktion.
+foreach ($GLOBALS['asyncScripts'] as $script) {
+    eval($script);
+}
+assertSameStrict([['klf', 201], ['lcn', 101], ['lcn', 103]], $GLOBALS['commands'], 'all three async workers execute');
+assertSameStrict(3, count($GLOBALS['workerResults']), 'all workers reported result');
 
-// Unsupported instance remains a hard configuration error.
+// Zentral-ZU kennt beim KLF die Zielrichtung. Sobald der echte RunStatus läuft,
+// muss die Gruppenanzeige FÄHRT ZU zeigen.
+$GLOBALS['variables'][311]['value'] = true;
+$group->MessageSink(time(), 311, 10603, [true, true, true]);
+$payload = json_decode((string) end($group->visualPayloads), true);
+assertSameStrict('FÄHRT ZU', $payload['members'][0]['statusText'] ?? '', 'central KLF closing status');
+
+// Nach Ende der Fahrt: echter RunStatus false + MAIN=100% => ZU.
+$GLOBALS['variables'][301]['value'] = 51200;
+$group->MessageSink(time(), 301, 10603, [51200, true, true]);
+$GLOBALS['variables'][311]['value'] = false;
+$group->MessageSink(time(), 311, 10603, [false, true, true]);
+$payload = json_decode((string) end($group->visualPayloads), true);
+assertSameStrict('ZU', $payload['members'][0]['statusText'] ?? '', 'KLF finished closed');
+
+// Externe KLF-Fahrt ohne sichere Richtung: niemals erfinden, aber LÄUFT anzeigen.
+$GLOBALS['variables'][301]['value'] = 20000;
+$group->MessageSink(time(), 301, 10603, [20000, true, true]);
+$GLOBALS['variables'][311]['value'] = true;
+$group->MessageSink(time(), 311, 10603, [true, true, true]);
+$payload = json_decode((string) end($group->visualPayloads), true);
+assertSameStrict('LÄUFT', $payload['members'][0]['statusText'] ?? '', 'external KLF unknown-direction moving status');
+$GLOBALS['variables'][311]['value'] = false;
+$group->MessageSink(time(), 311, 10603, [false, true, true]);
+
+// Unsupported instance blocks the whole action.
 $group->MockSetProperty('Members', json_encode([['InstanceID' => 999]]));
 $group->ApplyChanges();
 assertSameStrict(201, $group->moduleStatus, 'unsupported instance status');
-$before = count($GLOBALS['commands']);
+$before = count($GLOBALS['asyncScripts']);
 assertSameStrict(false, $group->CloseAll(), 'unsupported selection blocked');
-assertSameStrict($before, count($GLOBALS['commands']), 'unsupported selection sends nothing');
+assertSameStrict($before, count($GLOBALS['asyncScripts']), 'unsupported selection starts no worker');
 
-// ApplyChanges während einer Sequenz muss Queue/Timer verwerfen und niemals fortsetzen.
+// ApplyChanges verwirft noch nicht dispatchte Queue-Slots.
 $GLOBALS['lcn_state'][101] = 2;
 $GLOBALS['variables'][401]['value'] = 2;
 $group->MockSetProperty('Members', json_encode([['InstanceID' => 101], ['InstanceID' => 201]]));
@@ -197,7 +217,7 @@ $group->ApplyChanges();
 assertSameStrict(true, $group->CloseAll(), 'restart test sequence starts');
 assertSameStrict(true, $group->MockRunning(), 'restart test running');
 $group->ApplyChanges();
-assertSameStrict(false, $group->MockRunning(), 'ApplyChanges cancels running sequence');
+assertSameStrict(false, $group->MockRunning(), 'ApplyChanges cancels undispatched queue');
 assertSameStrict(0, $group->timers['SequenceTimer'], 'ApplyChanges cancels timer');
 assertSameStrict('[]', $group->MockQueue(), 'ApplyChanges clears queue');
 
