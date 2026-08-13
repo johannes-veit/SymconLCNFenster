@@ -1,0 +1,12 @@
+{
+  "id": "{BADDC815-41A2-4694-B3B0-926E0E48AD37}",
+  "name": "LCNWindowGroup",
+  "type": 3,
+  "vendor": "LCN",
+  "aliases": ["LCN Fenster Zentral ZU", "Alle Fenster ZU"],
+  "url": "",
+  "parentRequirements": [],
+  "childRequirements": [],
+  "implemented": [],
+  "prefix": "LCWG"
+}

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.0 – Alle Fenster ZU
+
+- neue eigenständige Instanz `LCN Fenster Zentral ZU` / `Alle Fenster ZU`
+- vorhandenes `LCN Fenster` aus 0.1.1 bytegleich übernommen
+- gemischte Auswahl aus LCN-Fenster- und VELUX-KLF200-Node-Instanzen
+- ZU-Befehl wird ausschließlich aus dem exakten Modul-GUID automatisch bestimmt
+- LCN-Fenster schließen über die vorhandene `LCW_Close()`-Funktion
+- KLF200 Node schließt über `KLF200_ShutterMoveDown()`; kein direktes Setzen/Fälschen der Positionsvariable
+- bereits geschlossene Fenster werden übersprungen
+- erster Hardwarebefehl ebenfalls asynchron über einen kurzen 50-ms-Modultimer; der Visu-Klick führt selbst keine Geräteaktion aus
+- danach 1000 ms Startabstand zwischen tatsächlich erforderlichen Befehlen
+- asynchrone Sequenz über Modultimer statt blockierender Mehrsekunden-Schleife bzw. eines potenziell wartenden KLF200-Aufrufs im Visu-Klick
+- doppelter Tastendruck während einer laufenden Sequenz erzeugt keine zweite Queue
+- Queue wird bei `ApplyChanges()`/Neustart bewusst verworfen; keine automatischen Hardwarebefehle nach Update/Restart
+- Visualisierung des Zentralbuttons entspricht dem vorhandenen `LCN Befehl / Zentral AUS`
+
 ## 0.1.1 – Instanzerstellung / Referenzverwaltung
 
 - fehlende modulinterne Methode `ResetReferences()` ergänzt

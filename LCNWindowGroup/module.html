@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <script src="/icons.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: transparent;
+            color: inherit;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+            -webkit-tap-highlight-color: transparent;
+        }
+        button { font: inherit; color: inherit; }
+
+        /*
+         * Bewusst identisches Raster wie LCN Befehl / Zentral AUS aus der
+         * Lichtsteuerung. Damit sitzt der Zentral-ZU-Taster an derselben Stelle.
+         */
+        .root {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            min-height: 280px;
+            padding: 8px 10px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .layout {
+            width: 100%;
+            max-width: 650px;
+            height: 100%;
+            min-height: 250px;
+            display: grid;
+            grid-template-columns: minmax(0, 470px) 86px;
+            align-items: center;
+            justify-content: center;
+            column-gap: 14px;
+        }
+        .dial {
+            position: relative;
+            grid-column: 1;
+            justify-self: stretch;
+            width: 100%;
+            max-width: 470px;
+            height: min(100%, 430px);
+            min-height: 245px;
+        }
+        .reserved-right {
+            grid-column: 2;
+            width: 86px;
+            height: 50px;
+            visibility: hidden;
+            pointer-events: none;
+        }
+        .command {
+            position: absolute;
+            left: 50%;
+            top: 51%;
+            transform: translate(-50%, -50%);
+            width: 116px;
+            height: 116px;
+            border: 0;
+            border-radius: 58px;
+            background: #00c7b0;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            z-index: 3;
+        }
+        .command:active:not(:disabled) {
+            transform: translate(-50%, -50%) scale(.97);
+        }
+        .command:disabled {
+            opacity: .45;
+            cursor: default;
+        }
+        .command i { font-size: 54px; }
+
+        @media (max-width: 640px) {
+            .root { min-height: 250px; padding: 4px 5px 8px; }
+            .layout {
+                grid-template-columns: minmax(0, 360px) 66px;
+                column-gap: 5px;
+                min-height: 230px;
+            }
+            .dial { max-width: 360px; min-height: 225px; }
+            .reserved-right { width: 66px; height: 44px; }
+            .command { width: 94px; height: 94px; border-radius: 47px; }
+            .command i { font-size: 44px; }
+        }
+        @media (max-width: 390px) {
+            .layout {
+                grid-template-columns: minmax(0, 1fr) 58px;
+                column-gap: 2px;
+            }
+            .dial { min-width: 0; }
+            .reserved-right { width: 58px; height: 40px; }
+            .command { width: 84px; height: 84px; border-radius: 42px; }
+            .command i { font-size: 39px; }
+        }
+    </style>
+</head>
+<body>
+<div class="root">
+    <div class="layout">
+        <div class="dial">
+            <button id="commandButton" class="command" type="button" aria-label="Alle Fenster schließen" title="Alle Fenster schließen">
+                <i class="fa-light fa-power-off"></i>
+            </button>
+        </div>
+        <div class="reserved-right" aria-hidden="true"></div>
+    </div>
+</div>
+<script>
+(function () {
+    var state = %%INITIAL_DATA%%;
+    var commandButton = document.getElementById('commandButton');
+
+    function render(next) {
+        var key;
+        if (next && typeof next === 'object') {
+            for (key in next) {
+                if (Object.prototype.hasOwnProperty.call(next, key)) {
+                    state[key] = next[key];
+                }
+            }
+        }
+
+        /* Laufende Sequenz ändert die Optik absichtlich nicht. Ein zweiter Druck
+           wird serverseitig ignoriert; dadurch kein Visu-Ausgrauen während 1-s-Folge. */
+        commandButton.disabled = !Boolean(state.configured);
+        commandButton.title = state.configured ? 'Alle Fenster schließen' : 'Fensterauswahl prüfen';
+    }
+
+    function sendCloseAll() {
+        if (!state.configured) { return; }
+        if (typeof requestAction === 'function') {
+            requestAction('CloseAll', true);
+        }
+    }
+
+    commandButton.onclick = function (event) {
+        if (event) { event.stopPropagation(); }
+        sendCloseAll();
+    };
+
+    window.__lcnWindowGroupHandleMessage = function (message) {
+        var data = message;
+        try {
+            if (typeof message === 'string') {
+                data = JSON.parse(message);
+            }
+            render(data);
+        } catch (e) {
+            /* Letzte gültige Darstellung beibehalten. */
+        }
+    };
+
+    render(state);
+}());
+
+function handleMessage(message) {
+    if (typeof window.__lcnWindowGroupHandleMessage === 'function') {
+        window.__lcnWindowGroupHandleMessage(message);
+    }
+}
+</script>
+</body>
+</html>

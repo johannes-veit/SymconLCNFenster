@@ -1,0 +1,48 @@
+{
+  "elements": [
+    {
+      "type": "Label",
+      "caption": "Zentraler, zustandsloser Schließbefehl. Es werden ausschließlich vorhandene 'LCN Fenster'- und 'KLF200 Node'-Instanzen ausgewählt; der passende ZU-Befehl wird automatisch erkannt."
+    },
+    {
+      "type": "List",
+      "name": "Members",
+      "caption": "Fenster",
+      "rowCount": 10,
+      "add": true,
+      "delete": true,
+      "columns": [
+        {
+          "caption": "Fenster-Instanz",
+          "name": "InstanceID",
+          "width": "auto",
+          "add": 0,
+          "edit": {
+            "type": "SelectInstance"
+          }
+        }
+      ]
+    },
+    {
+      "type": "Label",
+      "caption": "Ablauf: Bereits geschlossene Fenster werden übersprungen. Tatsächlich erforderliche Schließbefehle starten im Abstand von 1 Sekunde. LCN-Fenster nutzen ihre vorhandene ZU-Funktion; KLF200-Node-Fenster nutzen den nativen KLF200-Schließbefehl."
+    }
+  ],
+  "actions": [
+    {
+      "type": "Button",
+      "caption": "Test: Alle Fenster ZU",
+      "onClick": "LCWG_CloseAll($id);"
+    },
+    {
+      "type": "Button",
+      "caption": "Auswahl prüfen",
+      "onClick": "LCWG_ValidateSelection($id);"
+    }
+  ],
+  "status": [
+    {"code": 102, "icon": "active", "caption": "Aktiv"},
+    {"code": 104, "icon": "inactive", "caption": "Keine Fenster ausgewählt"},
+    {"code": 201, "icon": "error", "caption": "Nicht unterstützte oder unvollständige Fensterinstanz"}
+  ]
+}
