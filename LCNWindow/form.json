@@ -1,0 +1,133 @@
+{
+  "elements": [
+    {
+      "type": "ExpansionPanel",
+      "caption": "LCN-Taste",
+      "expanded": true,
+      "items": [
+        {
+          "type": "SelectInstance",
+          "name": "SendModule",
+          "caption": "LCN-Sendemodul"
+        },
+        {
+          "type": "RowLayout",
+          "items": [
+            {
+              "type": "Select",
+              "name": "Table",
+              "caption": "Tastentabelle",
+              "options": [
+                {
+                  "caption": "A",
+                  "value": "A"
+                },
+                {
+                  "caption": "B",
+                  "value": "B"
+                },
+                {
+                  "caption": "C",
+                  "value": "C"
+                },
+                {
+                  "caption": "D",
+                  "value": "D"
+                }
+              ]
+            },
+            {
+              "type": "NumberSpinner",
+              "name": "Key",
+              "caption": "Taste",
+              "minimum": 1,
+              "maximum": 8
+            }
+          ]
+        },
+        {
+          "type": "Label",
+          "caption": "Die konfigurierte Taste wird wie am GT8 verwendet: KURZ = Fenster ZU, LANG = Fenster AUF. Symcon schaltet die SR6-Relais niemals direkt."
+        }
+      ]
+    },
+    {
+      "type": "ExpansionPanel",
+      "caption": "Relais-Rückmeldung",
+      "expanded": true,
+      "items": [
+        {
+          "type": "Label",
+          "caption": "Bitte die beiden echten booleschen LCN-Relais-Statusvariablen auswählen. Es gibt keine automatische oder heuristische Suche."
+        },
+        {
+          "type": "SelectVariable",
+          "name": "RelayOpenVariable",
+          "caption": "Relais AUF / Öffnen"
+        },
+        {
+          "type": "SelectVariable",
+          "name": "RelayCloseVariable",
+          "caption": "Relais ZU / Schließen"
+        },
+        {
+          "type": "Label",
+          "caption": "Relais AUF EIN = FÄHRT AUF, Relais ZU EIN = FÄHRT ZU. Sind danach beide AUS, bleibt der zuletzt erkannte Endzustand OFFEN bzw. GESCHLOSSEN gespeichert."
+        }
+      ]
+    },
+    {
+      "type": "Label",
+      "caption": "Wichtig: Ohne Endlagensensor ist OFFEN/GESCHLOSSEN ein aus dem letzten eindeutig beobachteten Fahrbefehl abgeleiteter Zustand. LCN bleibt für Fahrzeit, Verriegelung und das Abschalten der Relais verantwortlich."
+    }
+  ],
+  "actions": [
+    {
+      "type": "Button",
+      "caption": "Rückmeldungen jetzt übernehmen (sendet keinen LCN-Befehl)",
+      "onClick": "LCW_SyncRelays($id);"
+    },
+    {
+      "type": "Button",
+      "caption": "Test: Fenster ZU (KURZ senden)",
+      "onClick": "LCW_Close($id);"
+    },
+    {
+      "type": "Button",
+      "caption": "Test: Fenster AUF (LANG senden)",
+      "onClick": "LCW_Open($id);"
+    }
+  ],
+  "status": [
+    {
+      "code": 102,
+      "icon": "active",
+      "caption": "Aktiv"
+    },
+    {
+      "code": 104,
+      "icon": "inactive",
+      "caption": "LCN-Sendemodul noch nicht zugeordnet"
+    },
+    {
+      "code": 201,
+      "icon": "error",
+      "caption": "Relais-Rückmeldungen unvollständig oder ungültig"
+    },
+    {
+      "code": 202,
+      "icon": "error",
+      "caption": "AUF und ZU dürfen nicht dieselbe Variable verwenden"
+    },
+    {
+      "code": 203,
+      "icon": "error",
+      "caption": "Sicherheitsfehler: beide Richtungsrelais melden gleichzeitig EIN"
+    },
+    {
+      "code": 204,
+      "icon": "error",
+      "caption": "LCN_SendCommand ist in der Symcon-Laufzeit nicht verfügbar"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "id": "{7AA3FC56-5CEC-4C42-9AF3-42DB2084772D}",
+  "name": "LCNWindow",
+  "type": 3,
+  "vendor": "LCN",
+  "aliases": ["LCN Fenster"],
+  "url": "",
+  "parentRequirements": [],
+  "childRequirements": [],
+  "implemented": [],
+  "prefix": "LCW"
+}

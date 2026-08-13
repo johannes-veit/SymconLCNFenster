@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <script src="/icons.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: transparent;
+            color: inherit;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+            -webkit-tap-highlight-color: transparent;
+        }
+        button { font: inherit; color: inherit; }
+        .window-root {
+            width: 100%;
+            height: 100%;
+            min-height: 235px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            padding: 12px 14px 16px;
+        }
+        .button-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 28px;
+            width: 100%;
+        }
+        .direction-wrap {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            min-width: 98px;
+        }
+        .direction-button {
+            width: 92px;
+            height: 92px;
+            border-radius: 50%;
+            border: 1px solid rgba(255,255,255,.15);
+            background: #00c7b0;
+            color: #062f2a;
+            box-shadow: 0 8px 22px rgba(0,0,0,.20), inset 0 1px 0 rgba(255,255,255,.20);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: transform .10s ease, filter .12s ease, opacity .12s ease, background .12s ease;
+            outline: none;
+        }
+        .direction-button i { font-size: 39px; }
+        .direction-button:hover:not(:disabled) { filter: brightness(1.06); }
+        .direction-button:active:not(:disabled) { transform: scale(.96); }
+        .direction-button:disabled,
+        .direction-button.is-current {
+            cursor: default;
+            background: rgba(135, 142, 145, .52);
+            color: rgba(235, 238, 239, .60);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
+            opacity: .72;
+            filter: none;
+        }
+        .direction-label {
+            font-size: 14px;
+            font-weight: 650;
+            letter-spacing: .04em;
+            opacity: .92;
+        }
+        .status-panel {
+            min-width: 190px;
+            max-width: 100%;
+            min-height: 45px;
+            padding: 8px 16px;
+            border-radius: 12px;
+            background: rgba(127, 127, 127, .12);
+            border: 1px solid rgba(127, 127, 127, .18);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 9px;
+        }
+        .status-panel i { font-size: 17px; opacity: .80; }
+        .status-text {
+            font-size: 15px;
+            font-weight: 650;
+            letter-spacing: .02em;
+            white-space: nowrap;
+        }
+        .warning {
+            width: min(360px, 100%);
+            min-height: 18px;
+            text-align: center;
+            font-size: 12px;
+            line-height: 1.3;
+            opacity: .78;
+        }
+        .warning:empty { display: none; }
+        @media (max-width: 420px) {
+            .window-root { min-height: 215px; gap: 16px; padding: 10px 8px 12px; }
+            .button-row { gap: 20px; }
+            .direction-wrap { min-width: 86px; }
+            .direction-button { width: 82px; height: 82px; }
+            .direction-button i { font-size: 35px; }
+            .status-panel { min-width: 175px; }
+        }
+    </style>
+</head>
+<body>
+<div class="window-root">
+    <div class="button-row">
+        <div class="direction-wrap">
+            <button id="openButton" class="direction-button" type="button" aria-label="Fenster öffnen" title="Fenster öffnen – LCN Langbefehl">
+                <i class="fa-light fa-arrow-up"></i>
+            </button>
+            <span class="direction-label">AUF</span>
+        </div>
+        <div class="direction-wrap">
+            <button id="closeButton" class="direction-button" type="button" aria-label="Fenster schließen" title="Fenster schließen – LCN Kurzbefehl">
+                <i class="fa-light fa-arrow-down"></i>
+            </button>
+            <span class="direction-label">ZU</span>
+        </div>
+    </div>
+
+    <div class="status-panel" aria-live="polite">
+        <i id="statusIcon" class="fa-light fa-window-frame"></i>
+        <span id="statusText" class="status-text">UNBEKANNT</span>
+    </div>
+    <div id="warning" class="warning"></div>
+</div>
+
+<script>
+(function () {
+    'use strict';
+
+    var state = %%INITIAL_DATA%%;
+    var openButton = document.getElementById('openButton');
+    var closeButton = document.getElementById('closeButton');
+    var statusText = document.getElementById('statusText');
+    var statusIcon = document.getElementById('statusIcon');
+    var warning = document.getElementById('warning');
+
+    var inFlight = false;
+    var queuedAction = null;
+    var queueTimer = 0;
+    var actionTimeout = 0;
+    var generation = 0;
+    var lastActionKey = '';
+    var lastActionTime = 0;
+    var localWarning = '';
+    var localWarningTimer = 0;
+
+    var ACTION_GUARD_MS = 220;
+    var QUEUE_DELAY_MS = 75;
+    var ACTION_TIMEOUT_MS = 8000;
+
+    function actionKey(ident) {
+        return ident;
+    }
+
+    function errorText(error) {
+        if (error && typeof error === 'object' && typeof error.message === 'string') {
+            return error.message;
+        }
+        return String(error || 'Unbekannter Kommunikationsfehler');
+    }
+
+    function render() {
+        var canControl = Boolean(state.canControl);
+        var openCurrent = Boolean(state.openCurrent);
+        var closeCurrent = Boolean(state.closeCurrent);
+
+        // A current target is greyed exactly like the jalousie end-position button.
+        // An in-flight API request does NOT grey or disable the opposite direction.
+        openButton.disabled = !canControl || openCurrent;
+        closeButton.disabled = !canControl || closeCurrent;
+        openButton.classList.toggle('is-current', openCurrent);
+        closeButton.classList.toggle('is-current', closeCurrent);
+
+        statusText.textContent = String(state.statusText || 'UNBEKANNT');
+        warning.textContent = localWarning || String(state.errorText || '');
+
+        var s = Number(state.state || 0);
+        statusIcon.className = 'fa-light ' + (
+            s === 4 ? 'fa-arrow-up' :
+            s === 3 ? 'fa-arrow-down' :
+            s === 5 ? 'fa-triangle-exclamation' :
+            s === 2 ? 'fa-window-frame-open' :
+            'fa-window-frame'
+        );
+    }
+
+
+    function showLocalWarning(message) {
+        localWarning = String(message || '');
+        if (localWarningTimer) {
+            window.clearTimeout(localWarningTimer);
+        }
+        render();
+        localWarningTimer = window.setTimeout(function () {
+            localWarningTimer = 0;
+            localWarning = '';
+            render();
+        }, 5000);
+    }
+
+    function scheduleQueued() {
+        if (inFlight || !queuedAction || queueTimer) {
+            return;
+        }
+        queueTimer = window.setTimeout(function () {
+            queueTimer = 0;
+            if (inFlight || !queuedAction) {
+                return;
+            }
+            var next = queuedAction;
+            queuedAction = null;
+            dispatch(next);
+        }, QUEUE_DELAY_MS);
+    }
+
+    function clearInFlight(dispatchQueued) {
+        generation += 1;
+        inFlight = false;
+        if (actionTimeout) {
+            window.clearTimeout(actionTimeout);
+            actionTimeout = 0;
+        }
+        if (dispatchQueued) {
+            scheduleQueued();
+        }
+    }
+
+    function failTransport(error) {
+        clearInFlight(false);
+        queuedAction = null;
+        if (queueTimer) {
+            window.clearTimeout(queueTimer);
+            queueTimer = 0;
+        }
+        showLocalWarning('Verbindung zu Symcon unterbrochen: ' + errorText(error) + '. Der Befehl wird nicht automatisch wiederholt.');
+    }
+
+    function armTimeout(currentGeneration) {
+        if (actionTimeout) {
+            window.clearTimeout(actionTimeout);
+        }
+        actionTimeout = window.setTimeout(function () {
+            if (!inFlight || currentGeneration !== generation) {
+                return;
+            }
+            failTransport('keine API-Rückmeldung innerhalb von 8 Sekunden');
+        }, ACTION_TIMEOUT_MS);
+    }
+
+    function dispatch(ident) {
+        var now = Date.now();
+        var key = actionKey(ident);
+        if (key === lastActionKey && now - lastActionTime < ACTION_GUARD_MS) {
+            return;
+        }
+        lastActionKey = key;
+        lastActionTime = now;
+        inFlight = true;
+        generation += 1;
+        var currentGeneration = generation;
+        armTimeout(currentGeneration);
+
+        try {
+            // Never retry automatically: a failed HTTP response does not prove that
+            // the LCN telegram was not already emitted.
+            var result = requestAction(ident, true);
+            if (result && typeof result.then === 'function') {
+                result.catch(failTransport);
+            }
+        } catch (error) {
+            failTransport(error);
+        }
+    }
+
+    function send(ident) {
+        if (!Boolean(state.canControl)) {
+            showLocalWarning('Die Modulkonfiguration ist nicht freigegeben.');
+            return;
+        }
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+            showLocalWarning('Keine Netzwerkverbindung. Es wurde kein Befehl gesendet.');
+            return;
+        }
+
+        if (inFlight || queuedAction || queueTimer) {
+            // Keep only the most recent *different* direction. Selecting the same
+            // direction as the request already in flight cancels an opposite queued
+            // target instead of sending the same LCN event twice.
+            if (ident === lastActionKey) {
+                queuedAction = null;
+                if (queueTimer) {
+                    window.clearTimeout(queueTimer);
+                    queueTimer = 0;
+                }
+                return;
+            }
+            queuedAction = ident;
+            return;
+        }
+        dispatch(ident);
+    }
+
+    function handleMessage(data) {
+        try {
+            var decoded = typeof data === 'string' ? JSON.parse(data) : data;
+            if (!decoded || typeof decoded !== 'object') {
+                return;
+            }
+            state = Object.assign({}, state, decoded);
+            if (inFlight) {
+                clearInFlight(true);
+            }
+            render();
+        } catch (error) {
+            showLocalWarning('Visualisierungsdaten ungültig: ' + errorText(error));
+        }
+    }
+
+    window.__lcnWindowHandleMessage = handleMessage;
+    openButton.addEventListener('click', function () { send('Open'); });
+    closeButton.addEventListener('click', function () { send('Close'); });
+    render();
+})();
+
+function handleMessage(message) {
+    if (typeof window.__lcnWindowHandleMessage === 'function') {
+        window.__lcnWindowHandleMessage(message);
+    }
+}
+</script>
+</body>
+</html>
