@@ -1,6 +1,6 @@
 # LCN Window Control für IP-Symcon 9
 
-Version **0.1.0** – eigenständige Fenstersteuerung für eine bereits in LCN-Pro programmierte GT8-Taste.
+Version **0.1.1** – eigenständige Fenstersteuerung für eine bereits in LCN-Pro programmierte GT8-Taste.
 
 ## Funktionsprinzip
 

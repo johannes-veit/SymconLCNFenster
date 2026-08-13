@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1 – Instanzerstellung / Referenzverwaltung
+
+- fehlende modulinterne Methode `ResetReferences()` ergänzt
+- Referenzen werden über `GetReferenceList()` und `UnregisterReference()` sauber neu aufgebaut
+- Laufzeittest korrigiert: der Mock stellt keine nicht existente Framework-Methode `ResetReferences()` mehr bereit
+- zusätzlicher Regressionstest für die Framework-Oberfläche und Instanzerstellung
+- keine Änderung an LCN-Fahr-, Zustands- oder Visualisierungslogik
+
 ## 0.1.0
 
 - erste eigenständige Instanz `LCN Fenster`

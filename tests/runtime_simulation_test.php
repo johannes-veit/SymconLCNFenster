@@ -77,8 +77,10 @@ class IPSModuleStrict
         if ($id) { $GLOBALS['mock_variables'][$id]['value'] = $value; }
     }
     protected function GetValue(string $ident): mixed { return $this->values[$ident]; }
-    protected function RegisterReference(int $id): void {}
-    protected function ResetReferences(): void {}
+    protected array $references = [];
+    protected function RegisterReference(int $id): void { $this->references[$id] = $id; }
+    protected function UnregisterReference(int $id): void { unset($this->references[$id]); }
+    protected function GetReferenceList(): array { return array_values($this->references); }
     protected function RegisterMessage(int $id, int $message): void { $this->messages[$id][$message] = true; }
     protected function UnregisterMessage(int $id, int $message): void { unset($this->messages[$id][$message]); }
     protected function SetStatus(int $status): void { $this->moduleStatus = $status; }

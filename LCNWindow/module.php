@@ -463,6 +463,18 @@ class LCNWindow extends IPSModuleStrict
         }
     }
 
+    /** Removes all object references previously registered by this module. */
+    private function ResetReferences(): void
+    {
+        foreach ($this->GetReferenceList() as $referenceID) {
+            try {
+                $this->UnregisterReference($referenceID);
+            } catch (Throwable) {
+                // Reference may already have been removed with its target object.
+            }
+        }
+    }
+
     private function DetachRelayMessages(): void
     {
         // Use the previously active IDs, not the newly edited properties, so a

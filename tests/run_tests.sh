@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+DIR="$ROOT/tests"
 php -l "$ROOT/LCNWindow/module.php" >/dev/null
-php "$ROOT/tests/ts_encoder_test.php"
-php "$ROOT/tests/state_machine_test.php"
-php "$ROOT/tests/repository_integrity_test.php"
-php "$ROOT/tests/runtime_simulation_test.php"
+php "$DIR/ts_encoder_test.php"
+php "$DIR/state_machine_test.php"
+php "$DIR/repository_integrity_test.php"
+php "$DIR/framework_surface_test.php"
+php "$DIR/runtime_simulation_test.php"
 ROOT_PATH="$ROOT" python3 - <<'PY'
 import json, os
 from pathlib import Path

@@ -1,12 +1,12 @@
 {
-  "id": "{0D327959-E5B9-467E-A85B-D3EB9B352480}",
-  "author": "Johannes Veit",
-  "name": "LCN Window Control",
-  "url": "",
-  "compatibility": {
-    "version": "9.0"
-  },
-  "version": "0.1.0",
-  "build": 1,
-  "date": 1786634400
+    "id": "{0D327959-E5B9-467E-A85B-D3EB9B352480}",
+    "author": "Johannes Veit",
+    "name": "LCN Window Control",
+    "url": "",
+    "compatibility": {
+        "version": "9.0"
+    },
+    "version": "0.1.1",
+    "build": 2,
+    "date": 1786634400
 }
