@@ -1,48 +1,25 @@
 # LCN Window Control für IP-Symcon 9
 
-Version **0.2.0** – stabile LCN-Fensterinstanz **0.1.1 unverändert** plus neuer zentraler Gruppenbefehl **Alle Fenster ZU**.
+Version **0.2.1**.
 
-## 1. LCN Fenster
+## LCN Fenster
 
-Die vorhandene Instanz `LCN Fenster` entspricht bytegleich der funktionierenden Version 0.1.1:
+Die bestehende Fensterinstanz bleibt gegenüber der funktionierenden V0.1.1/V0.2.0 unverändert.
 
 - KURZ = ZU
-- LANG / MAKE = AUF
-- echte AUF-/ZU-Relaisrückmeldungen bestimmen den Zustand
-- kein direktes Relais-Schalten durch Symcon
-- kein Symcon-Fahrzeittimer
-- persistenter abgeleiteter Endzustand
-- zwei runde türkisfarbene Buttons AUF/ZU
+- LANG/MAKE = AUF
+- LCN übernimmt Relaislogik, Verriegelung und zeitgesteuertes Abschalten.
+- Symcon speichert den erkannten Endzustand persistent.
 
-## 2. LCN Fenster Zentral ZU / Alle Fenster ZU
+## LCN Fenster Zentral ZU
 
-Neue zustandslose Zentralinstanz mit genau einem runden türkisfarbenen Button im Layout des `LCN Befehl / Zentral AUS` aus der Lichtsteuerung.
+In der Gruppeninstanz werden nur die gewünschten Fensterinstanzen ausgewählt. Unterstützt werden automatisch:
 
-### Konfiguration
+- `LCN Fenster` `{7AA3FC56-5CEC-4C42-9AF3-42DB2084772D}` → `LCW_Close()`
+- `KLF200 Node` `{4EBD07B1-2962-4531-AC5F-7944789A9CE5}` → `KLF200_ShutterMoveDown()`
 
-Es werden ausschließlich die gewünschten **Fenster-Instanzen** in einer Liste ausgewählt. Weitere Tasten-, Relais- oder Variablenangaben sind nicht nötig.
+Die Gruppenfolge benutzt einen dauerhaft aktiven 1-s-Modultimer. Alle ausgewählten Fenster werden zunächst in die Queue aufgenommen; unmittelbar vor dem jeweiligen Slot wird geprüft, ob das Fenster bereits geschlossen ist. Bereits geschlossene Fenster werden übersprungen, ohne einen Hardwarebefehl zu erzeugen.
 
-Automatische Erkennung:
+Es werden **keine** Status- oder Positionswerte künstlich gesetzt. LCN-Fenster aktualisieren sich über ihre vorhandene Relaisrückmeldung; KLF200 aktualisiert seine eigene `MAIN`-Position. Die Gruppen-Kachel beobachtet diese echten Variablen und zeigt den aktuellen Zustand der eingebundenen Fenster an.
 
-- `LCN Fenster` `{7AA3FC56-5CEC-4C42-9AF3-42DB2084772D}` → vorhandene Methode `LCW_Close()`
-- `KLF200 Node` `{4EBD07B1-2962-4531-AC5F-7944789A9CE5}` → nativer Befehl `KLF200_ShutterMoveDown()`
-
-Für KLF200 wird **nicht** per `SetValue()` in die Positionsvariable geschrieben. Der native KLF200-Schließbefehl steuert das Gerät; die vorhandene KLF200-Instanz aktualisiert danach ihre eigenen Statusvariablen und damit auch die bestehende Dachfenster-Visualisierung.
-
-### Sequenz
-
-- bereits geschlossene Fenster werden übersprungen
-- der Visu-Klick legt nur die Queue an; **kein Hardwarebefehl läuft im HTML-Aufruf selbst**
-- der erste erforderliche Schließbefehl startet über einen kurzen 50-ms-Modultimer
-- weitere tatsächlich erforderliche Befehle folgen mit **1000 ms Abstand**
-- kein mehrsekündiges `sleep()` und kein blockierender KLF200-Aufruf im Visualisierungs-Klick
-- erneuter Tastendruck während einer laufenden Sequenz erzeugt keine zweite Queue
-- bei Update/Neustart wird eine eventuell alte Queue verworfen; es werden niemals automatisch Hardwarebefehle fortgesetzt
-
-### KLF200-Richtung
-
-Beim verwendeten KLF200-Modul ist für Window Opener `MAIN` die Positionsvariable. Der native `ShutterMoveDown()`-Befehl setzt den Hauptparameter auf `0xC800` (Maximum / 100 %), während `ShutterMoveUp()` auf `0x0000` geht. Deshalb wird für **Schließen** bewusst `ShutterMoveDown()` verwendet und nicht ein Positionswert 0 erzwungen.
-
-## Installation / Update
-
-Die Library wie bisher aktualisieren. Bestehende `LCN Fenster`-Instanzen bleiben unverändert. Danach eine neue Instanz **LCN Fenster Zentral ZU** bzw. **Alle Fenster ZU** anlegen und in der Liste alle gewünschten `LCN Fenster`- und `KLF200 Node`-Instanzen auswählen.
+Die Visualisierung zeigt zusätzlich für ca. 3 Sekunden **„Befehl gesendet“** nach einem gültigen Zentral-ZU-Tastendruck.

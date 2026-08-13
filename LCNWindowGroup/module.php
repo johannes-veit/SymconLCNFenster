@@ -8,16 +8,24 @@ class LCNWindowGroup extends IPSModuleStrict
     private const STATUS_INACTIVE = 104;
     private const STATUS_INVALID_MEMBER = 201;
 
+    private const MSG_VARIABLE_UPDATE = 10603;
+    private const MSG_OBJECT_NAME_CHANGED = 10404;
+
     private const LCN_WINDOW_MODULE_ID = '{7AA3FC56-5CEC-4C42-9AF3-42DB2084772D}';
     private const KLF200_NODE_MODULE_ID = '{4EBD07B1-2962-4531-AC5F-7944789A9CE5}';
 
+    private const LCN_STATE_UNKNOWN = 0;
     private const LCN_STATE_CLOSED = 1;
+    private const LCN_STATE_OPEN = 2;
     private const LCN_STATE_MOVING_CLOSE = 3;
+    private const LCN_STATE_MOVING_OPEN = 4;
+    private const LCN_STATE_FAULT = 5;
+
+    private const LCN_STATUS_IDENT = 'Status';
     private const KLF200_MAIN_IDENT = 'MAIN';
     private const KLF200_CLOSED_VALUE = 0xC800; // 51200 = 100 % / geschlossen
 
     private const TIMER_NAME = 'SequenceTimer';
-    private const START_DELAY_MS = 50;
     private const COMMAND_GAP_MS = 1000;
 
     public function Create(): void
@@ -26,11 +34,15 @@ class LCNWindowGroup extends IPSModuleStrict
 
         $this->RegisterPropertyString('Members', '[]');
 
-        // Queue/Running sind nur Ablaufzustand. ApplyChanges verwirft eine alte
+        // Queue/Running sind reine Ablaufzustände. ApplyChanges verwirft eine alte
         // Sequenz bewusst, damit ein Update/Neustart niemals Hardwarebefehle fortsetzt.
         $this->RegisterAttributeString('Queue', '[]');
         $this->RegisterAttributeBoolean('Running', false);
         $this->RegisterAttributeString('LastError', '');
+
+        // Nur für saubere Message-Abmeldung bei Konfigurationsänderungen.
+        $this->RegisterAttributeString('ObservedStatusVariables', '[]');
+        $this->RegisterAttributeString('ObservedMemberInstances', '[]');
 
         $this->RegisterTimer(self::TIMER_NAME, 0, 'LCWG_ProcessNext($_IPS["TARGET"]);');
         $this->SetVisualizationType(1);
@@ -45,18 +57,62 @@ class LCNWindowGroup extends IPSModuleStrict
         $this->WriteAttributeString('Queue', '[]');
         $this->WriteAttributeBoolean('Running', false);
         $this->ClearLastError();
+
+        $this->DetachMessages();
         $this->ResetReferences();
 
         $validation = $this->BuildValidatedMembers();
+        $observedStatus = [];
+        $observedMembers = [];
+
         foreach ($validation['members'] as $member) {
-            $this->RegisterReference($member['instanceID']);
-            if ($member['type'] === 'klf200' && $member['positionID'] > 0) {
-                $this->RegisterReference($member['positionID']);
+            $instanceID = (int) $member['instanceID'];
+            $statusID = (int) $member['statusID'];
+
+            $this->RegisterReference($instanceID);
+            $observedMembers[] = $instanceID;
+            try {
+                $this->RegisterMessage($instanceID, self::MSG_OBJECT_NAME_CHANGED);
+            } catch (Throwable $e) {
+                $this->SendDebug('ApplyChanges', sprintf('Namensbeobachtung #%d: %s', $instanceID, $e->getMessage()), 0);
+            }
+
+            if ($statusID > 0 && IPS_VariableExists($statusID)) {
+                $this->RegisterReference($statusID);
+                $observedStatus[] = $statusID;
+                try {
+                    $this->RegisterMessage($statusID, self::MSG_VARIABLE_UPDATE);
+                } catch (Throwable $e) {
+                    $this->SendDebug('ApplyChanges', sprintf('Statusbeobachtung #%d: %s', $statusID, $e->getMessage()), 0);
+                }
             }
         }
 
+        $this->WriteAttributeString('ObservedStatusVariables', $this->EncodeIDs($observedStatus));
+        $this->WriteAttributeString('ObservedMemberInstances', $this->EncodeIDs($observedMembers));
+
         $this->ApplyValidationStatus($validation);
         $this->PublishVisualizationState();
+    }
+
+    public function MessageSink(int $TimeStamp, int $SenderID, int $Message, array $Data): void
+    {
+        if ($Message === self::MSG_OBJECT_NAME_CHANGED) {
+            $observedMembers = $this->DecodeIDs($this->ReadAttributeString('ObservedMemberInstances'));
+            if (in_array($SenderID, $observedMembers, true)) {
+                $this->PublishVisualizationState();
+            }
+            return;
+        }
+
+        if ($Message !== self::MSG_VARIABLE_UPDATE) {
+            return;
+        }
+
+        $observedStatus = $this->DecodeIDs($this->ReadAttributeString('ObservedStatusVariables'));
+        if (in_array($SenderID, $observedStatus, true)) {
+            $this->PublishVisualizationState();
+        }
     }
 
     public function RequestAction(string $Ident, mixed $Value): void
@@ -76,14 +132,21 @@ class LCNWindowGroup extends IPSModuleStrict
     }
 
     /**
-     * Startet die Zentral-ZU-Folge. Auch der erste Hardwarebefehl läuft über einen
-     * kurzen Modultimer; dadurch führt der HTML-/Visu-Aufruf selbst keinerlei potenziell
-     * blockierende Geräteaktion aus. Weitere Befehle folgen mit 1 s Abstand.
+     * Startet die Zentral-ZU-Folge.
+     *
+     * V0.2.1: Die Queue enthält bewusst ALLE ausgewählten Fenster. Der Istzustand
+     * wird erst unmittelbar vor dem jeweiligen Slot geprüft. Dadurch kann kein
+     * Fenster wegen eines beim Tastendruck kurz veralteten Zustands aus der Queue
+     * herausfallen.
+     *
+     * Der Timer bleibt während der gesamten Folge mit 1000 ms aktiv und wird nicht
+     * nach jedem Callback auf 0 gesetzt und neu bewaffnet. Erst FinishSequence()
+     * schaltet ihn ab. Damit gibt es keinen Re-Arm-Abbruch nach mehreren Fenstern.
      */
     public function CloseAll(): bool
     {
         if ($this->ReadAttributeBoolean('Running')) {
-            // Ein zweiter Tastendruck während derselben Sequenz erzeugt keine Duplikate.
+            // Zweiter Tastendruck während derselben Sequenz erzeugt keine Duplikate.
             return true;
         }
 
@@ -95,25 +158,19 @@ class LCNWindowGroup extends IPSModuleStrict
             return false;
         }
 
-        $queue = [];
-        foreach ($validation['members'] as $member) {
-            if (!$this->IsAlreadyClosed($member)) {
-                $queue[] = (int) $member['instanceID'];
-            }
-        }
-
-        if ($queue === []) {
-            $this->WriteAttributeString('Queue', '[]');
-            $this->WriteAttributeBoolean('Running', false);
-            $this->ClearLastError();
-            $this->PublishVisualizationState();
-            return true;
-        }
+        $queue = array_map(
+            static fn (array $member): int => (int) $member['instanceID'],
+            $validation['members']
+        );
 
         $this->WriteAttributeString('Queue', $this->EncodeIDs($queue));
         $this->WriteAttributeBoolean('Running', true);
         $this->ClearLastError();
-        $this->SetTimerInterval(self::TIMER_NAME, self::START_DELAY_MS);
+
+        // Bewusst ein dauerhaft laufender 1-s-Timer. Der erste Geräteslot liegt
+        // nach 1 s; jeder weitere tatsächlich notwendige Befehl folgt frühestens
+        // im nächsten Timer-Slot. Geschlossene Fenster werden im Slot übersprungen.
+        $this->SetTimerInterval(self::TIMER_NAME, self::COMMAND_GAP_MS);
         $this->PublishVisualizationState();
 
         return true;
@@ -122,16 +179,13 @@ class LCNWindowGroup extends IPSModuleStrict
     /** Timer-Callback; kann auch von Regressionstests direkt aufgerufen werden. */
     public function ProcessNext(): bool
     {
-        // Ein Timer ist immer "one shot" aus Sicht dieser Zustandsmaschine. Erst nach
-        // einem tatsächlich versuchten Befehl wird er wieder auf 1000 ms gesetzt.
-        $this->SetTimerInterval(self::TIMER_NAME, 0);
-
         if (!$this->ReadAttributeBoolean('Running')) {
+            $this->SetTimerInterval(self::TIMER_NAME, 0);
             return true;
         }
 
         $queue = $this->DecodeIDs($this->ReadAttributeString('Queue'));
-        $allSuccessful = true;
+        $stepSuccessful = true;
 
         while ($queue !== []) {
             $instanceID = array_shift($queue);
@@ -139,12 +193,13 @@ class LCNWindowGroup extends IPSModuleStrict
 
             $member = $this->ResolveMember($instanceID);
             if ($member === null) {
-                $allSuccessful = false;
+                $stepSuccessful = false;
                 $this->SetLastError(sprintf('Instanz #%d wird nicht mehr als unterstütztes Fenster erkannt.', $instanceID));
                 continue;
             }
 
             try {
+                // Zustand erst JETZT prüfen, nicht beim Klick auf den Zentralbutton.
                 if ($this->IsAlreadyClosed($member)) {
                     $this->SendDebug('Zentral ZU', sprintf('#%d %s bereits geschlossen - übersprungen.', $instanceID, IPS_GetName($instanceID)), 0);
                     continue;
@@ -152,31 +207,29 @@ class LCNWindowGroup extends IPSModuleStrict
 
                 $result = $this->SendCloseCommand($member);
                 if (!$result) {
-                    $allSuccessful = false;
+                    $stepSuccessful = false;
                     $this->SetLastError(sprintf('Schließbefehl für #%d %s wurde nicht bestätigt.', $instanceID, IPS_GetName($instanceID)));
                 } else {
                     $this->SendDebug('Zentral ZU', sprintf('#%d %s: Schließbefehl gesendet.', $instanceID, IPS_GetName($instanceID)), 0);
                 }
             } catch (Throwable $e) {
-                $allSuccessful = false;
+                $stepSuccessful = false;
                 $this->SetLastError(sprintf('#%d %s: %s', $instanceID, IPS_GetName($instanceID), $e->getMessage()));
             }
 
-            // Nach jedem tatsächlich notwendigen Befehlsversuch exakt 1 s bis zum
-            // nächsten Fenster. Bereits geschlossene Fenster verbrauchen keinen Slot.
-            if ($queue !== []) {
-                $this->SetTimerInterval(self::TIMER_NAME, self::COMMAND_GAP_MS);
-            } else {
+            // Genau ein tatsächlich notwendiger Befehlsversuch pro 1-s-Slot.
+            // Der Timer bleibt aktiv; kein Disable/Re-Arm innerhalb des Callbacks.
+            if ($queue === []) {
                 $this->FinishSequence();
             }
             $this->PublishVisualizationState();
-            return $allSuccessful;
+            return $stepSuccessful;
         }
 
-        // Alle ausgewählten Fenster waren bereits geschlossen.
+        // Alle noch in diesem Slot betrachteten Fenster waren bereits geschlossen.
         $this->FinishSequence();
         $this->PublishVisualizationState();
-        return $allSuccessful;
+        return $stepSuccessful;
     }
 
     public function ValidateSelection(): bool
@@ -257,9 +310,14 @@ class LCNWindowGroup extends IPSModuleStrict
         }
 
         if ($moduleID === self::LCN_WINDOW_MODULE_ID) {
+            $statusID = $this->FindLCNStatusVariable($InstanceID);
+            if ($statusID <= 0) {
+                return null;
+            }
             return [
                 'type' => 'lcn',
                 'instanceID' => $InstanceID,
+                'statusID' => $statusID,
                 'positionID' => 0
             ];
         }
@@ -272,11 +330,27 @@ class LCNWindowGroup extends IPSModuleStrict
             return [
                 'type' => 'klf200',
                 'instanceID' => $InstanceID,
+                'statusID' => $positionID,
                 'positionID' => $positionID
             ];
         }
 
         return null;
+    }
+
+    private function FindLCNStatusVariable(int $InstanceID): int
+    {
+        $variableID = @IPS_GetObjectIDByIdent(self::LCN_STATUS_IDENT, $InstanceID);
+        if (!is_int($variableID) || $variableID <= 0 || !IPS_VariableExists($variableID)) {
+            return 0;
+        }
+
+        try {
+            $variable = IPS_GetVariable($variableID);
+            return (int) ($variable['VariableType'] ?? -1) === 1 ? $variableID : 0;
+        } catch (Throwable) {
+            return 0;
+        }
     }
 
     private function FindKLF200MainVariable(int $InstanceID): int
@@ -327,8 +401,8 @@ class LCNWindowGroup extends IPSModuleStrict
 
         if ($Member['type'] === 'klf200') {
             // Nicht SetValue() verwenden: Der echte KLF200-Modulbefehl führt die
-            // Hardwareaktion aus; dessen eigene Rückmeldungen aktualisieren Position,
-            // Laufstatus und die vorhandene Dachfenster-Visualisierung anschließend selbst.
+            // Hardwareaktion aus. Die KLF200-Rückmeldungen aktualisieren danach
+            // dessen Position/Laufstatus und damit die vorhandene Dachfenster-Visu.
             return (bool) KLF200_ShutterMoveDown($instanceID);
         }
 
@@ -354,6 +428,72 @@ class LCNWindowGroup extends IPSModuleStrict
         }
 
         return array_values(array_unique($ids));
+    }
+
+    private function GetMemberInfo(array $Members): array
+    {
+        $result = [];
+
+        foreach ($Members as $member) {
+            $instanceID = (int) $member['instanceID'];
+            $statusText = '?';
+            $statusClass = 'unknown';
+
+            try {
+                if ($member['type'] === 'lcn') {
+                    $state = (int) LCW_GetWindowState($instanceID);
+                    switch ($state) {
+                        case self::LCN_STATE_CLOSED:
+                            $statusText = 'ZU';
+                            $statusClass = 'closed';
+                            break;
+                        case self::LCN_STATE_OPEN:
+                            $statusText = 'AUF';
+                            $statusClass = 'open';
+                            break;
+                        case self::LCN_STATE_MOVING_CLOSE:
+                            $statusText = 'FÄHRT ZU';
+                            $statusClass = 'moving';
+                            break;
+                        case self::LCN_STATE_MOVING_OPEN:
+                            $statusText = 'FÄHRT AUF';
+                            $statusClass = 'moving';
+                            break;
+                        case self::LCN_STATE_FAULT:
+                            $statusText = 'FEHLER';
+                            $statusClass = 'fault';
+                            break;
+                        default:
+                            $statusText = '?';
+                            $statusClass = 'unknown';
+                    }
+                } elseif ($member['type'] === 'klf200') {
+                    $position = (int) GetValue((int) $member['positionID']);
+                    if ($position >= self::KLF200_CLOSED_VALUE) {
+                        $statusText = 'ZU';
+                        $statusClass = 'closed';
+                    } else {
+                        // KLF200 liefert hier die reale Position. Ohne einen separaten,
+                        // sicher typisierten Laufstatus zeigen wir bis zur Endlage AUF,
+                        // statt vorzeitig ZU zu behaupten.
+                        $statusText = 'AUF';
+                        $statusClass = 'open';
+                    }
+                }
+            } catch (Throwable $e) {
+                $this->SendDebug('Fensterstatus', sprintf('#%d: %s', $instanceID, $e->getMessage()), 0);
+            }
+
+            $result[] = [
+                'id' => $instanceID,
+                'name' => IPS_GetName($instanceID),
+                'type' => (string) $member['type'],
+                'statusText' => $statusText,
+                'statusClass' => $statusClass
+            ];
+        }
+
+        return $result;
     }
 
     private function ApplyValidationStatus(array $Validation): void
@@ -389,7 +529,8 @@ class LCNWindowGroup extends IPSModuleStrict
             'configured' => $validation['valid'],
             'memberCount' => count($validation['members']),
             'running' => $this->ReadAttributeBoolean('Running'),
-            'errorText' => $this->ReadAttributeString('LastError')
+            'errorText' => $this->ReadAttributeString('LastError'),
+            'members' => $this->GetMemberInfo($validation['members'])
         ];
     }
 
@@ -404,6 +545,28 @@ class LCNWindowGroup extends IPSModuleStrict
         } catch (Throwable $e) {
             $this->SendDebug('Visualisierung', 'UpdateVisualizationValue: ' . $e->getMessage(), 0);
         }
+    }
+
+    private function DetachMessages(): void
+    {
+        foreach ($this->DecodeIDs($this->ReadAttributeString('ObservedStatusVariables')) as $variableID) {
+            try {
+                $this->UnregisterMessage($variableID, self::MSG_VARIABLE_UPDATE);
+            } catch (Throwable) {
+                // Ziel oder alte Registrierung existiert nicht mehr.
+            }
+        }
+
+        foreach ($this->DecodeIDs($this->ReadAttributeString('ObservedMemberInstances')) as $instanceID) {
+            try {
+                $this->UnregisterMessage($instanceID, self::MSG_OBJECT_NAME_CHANGED);
+            } catch (Throwable) {
+                // Ziel oder alte Registrierung existiert nicht mehr.
+            }
+        }
+
+        $this->WriteAttributeString('ObservedStatusVariables', '[]');
+        $this->WriteAttributeString('ObservedMemberInstances', '[]');
     }
 
     private function ResetReferences(): void
